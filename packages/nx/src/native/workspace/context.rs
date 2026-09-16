@@ -19,6 +19,7 @@ use crate::native::workspace::files_archive::{
     FilesArchive, NxFileHashes, read_files_archive, write_files_archive,
 };
 use crate::native::workspace::files_hashing::{full_files_hash, selective_files_hash};
+use crate::native::workspace::glob_hashing::hash_glob_groups;
 use crate::native::workspace::types::{
     FileMap, NxWorkspaceFilesExternals, ProjectFiles, UpdatedWorkspaceFiles,
 };
@@ -491,38 +492,33 @@ impl FilesWorker {
         true
     }
 
+    /// Runs `f` against the file table under its lock, once the walk has
+    /// filled it. `None` when there is no table to wait for.
+    fn with_files<R>(&self, f: impl FnOnce(&Files) -> R) -> Option<R> {
+        let files_sync = self.0.as_ref()?;
+        let (files_lock, cvar) = files_sync.deref();
+
+        trace!("waiting for files to be available");
+        let files = files_lock.lock().expect("Should be able to lock files");
+        let files = cvar
+            .wait(files, |guard| guard.is_empty())
+            .expect("Should be able to wait for files");
+        trace!("files are available");
+
+        Some(f(&files))
+    }
+
     fn get_files(&self) -> Vec<FileData> {
-        if let Some(files_sync) = &self.0 {
-            let (files_lock, cvar) = files_sync.deref();
-
-            trace!("waiting for files to be available");
-            let files = files_lock.lock().expect("Should be able to lock files");
-
-            #[cfg(target_arch = "wasm32")]
-            let files = cvar
-                .wait(files, |guard| guard.is_empty())
-                .expect("Should be able to wait for files");
-
-            #[cfg(not(target_arch = "wasm32"))]
-            let files = cvar
-                .wait(files, |guard| guard.is_empty())
-                .expect("Should be able to wait for files");
-
-            let file_data = files
+        self.with_files(|files| {
+            files
                 .iter()
                 .map(|(path, hash)| FileData {
                     file: path.to_normalized_string(),
                     hash: hash.clone(),
                 })
-                .collect();
-
-            drop(files);
-
-            trace!("files are available");
-            file_data
-        } else {
-            vec![]
-        }
+                .collect()
+        })
+        .unwrap_or_default()
     }
 
     /// Re-walk the workspace, diff it against the map we are holding, then adopt
@@ -722,20 +718,10 @@ impl WorkspaceContext {
         &self,
         glob_groups: Vec<Vec<String>>,
     ) -> napi::Result<Vec<String>> {
-        let files = &self.all_file_data();
-        let hashes = glob_groups
-            .into_iter()
-            .map(|globs| {
-                let globbed_files = glob_files(files, globs, None)?.collect::<Vec<_>>();
-                let mut hasher = xxh3::Xxh3::new();
-                for file in globbed_files {
-                    hasher.update(file.file.as_bytes());
-                    hasher.update(file.hash.as_bytes());
-                }
-                Ok(hasher.digest().to_string())
-            })
-            .collect::<napi::Result<Vec<_>>>()?;
-
+        let hashes = self
+            .files_worker
+            .with_files(|files| hash_glob_groups(files, &glob_groups))
+            .unwrap_or_else(|| hash_glob_groups(&[], &glob_groups))?;
         Ok(hashes)
     }
 
@@ -745,6 +731,10 @@ impl WorkspaceContext {
         globs: Vec<String>,
         exclude: Option<Vec<String>>,
     ) -> napi::Result<String> {
+        if exclude.as_ref().is_none_or(|exclude| exclude.is_empty()) {
+            let mut hashes = self.hash_files_matching_globs(vec![globs])?;
+            return Ok(hashes.remove(0));
+        }
         let files = &self.all_file_data();
         let globbed_files = glob_files(files, globs, exclude)?.collect::<Vec<_>>();
 
