@@ -1277,6 +1277,7 @@ type RunMigrations = {
   ifExists: boolean;
   agentic: AgenticArg;
   validate?: boolean;
+  finalValidation?: boolean;
   interactive?: boolean;
   // The active orchestrated run to continue instead of starting one.
   runId?: string;
@@ -1464,6 +1465,7 @@ export async function parseMigrationsOptions(
       ifExists: options.ifExists,
       agentic: options.agentic,
       validate: options.validate,
+      finalValidation: options.finalValidation,
       interactive: options.interactive,
       ...(options.runId !== undefined ? { runId: options.runId } : {}),
       ...(options.startFresh === true ? { startFresh: true } : {}),
@@ -3278,6 +3280,7 @@ async function runMigrations(
     ifExists: boolean;
     agentic: AgenticArg;
     validate?: boolean;
+    finalValidation?: boolean;
     interactive?: boolean;
     runId?: string;
     startFresh?: boolean;
@@ -3422,6 +3425,7 @@ async function runMigrations(
       skipInstall: shouldSkipInstall,
       installedNxVersion: orchestratorNxPackageJson.version,
       validate: opts.validate,
+      finalValidation: opts.finalValidation,
       onExistingRun: opts.startFresh === true ? 'start-fresh' : 'report',
       ...(opts.startFresh === true ? { replaceRunId: opts.runId } : {}),
       confirmStart: refuseCommitsOnDefaultBranch,
@@ -3497,6 +3501,7 @@ async function runMigrations(
       skipInstall: shouldSkipInstall,
       installedNxVersion: nxPackageJson.version,
       validate: opts.validate,
+      finalValidation: opts.finalValidation,
       agent: agentic.selectedAgent,
       interactive: opts.interactive,
       runId: opts.runId,

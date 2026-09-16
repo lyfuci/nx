@@ -249,6 +249,21 @@ describe('orchestrator', () => {
     ...extra,
   });
 
+  const passStep = (
+    id: string,
+    status: MigrateStepStatus,
+    extra: Partial<MigrateStep> = {}
+  ): MigrateStep => ({
+    id,
+    roundIndex: 0,
+    kind: 'final-validation',
+    status,
+    attempt: 1,
+    dispenseCount: status === 'pending' ? 0 : 1,
+    hasGenerator: false,
+    ...extra,
+  });
+
   function setupRun(
     runId: string,
     opts: {
@@ -265,6 +280,7 @@ describe('orchestrator', () => {
       nxVersion?: string;
       runbook?: string | false;
       validate?: boolean;
+      gitRefAtInit?: string;
       issues?: MigrateRunIssue[];
     }
   ): string {
@@ -290,6 +306,7 @@ describe('orchestrator', () => {
       commitPrefix: 'chore: [nx migration] ',
       ...(opts.skipInstall ? { skipInstall: true } : {}),
       ...(opts.validate !== undefined ? { validate: opts.validate } : {}),
+      ...(opts.gitRefAtInit ? { gitRefAtInit: opts.gitRefAtInit } : {}),
       rounds: [
         {
           index: 0,
@@ -378,13 +395,18 @@ describe('orchestrator', () => {
         skipInstall: false,
         installedNxVersion: '23.0.0',
         validate: undefined,
+        finalValidation: undefined,
       });
 
       const { active } = findActiveRun(root);
       expect(active).not.toBeNull();
       const { runId, state } = active;
 
-      expect(state.steps.map((s) => s.id)).toEqual(['step-1', 'step-2']);
+      expect(state.steps.map((s) => s.id)).toEqual([
+        'step-1',
+        'step-2',
+        'step-3',
+      ]);
       expect(
         state.steps.map((s) => [
           s.kind,
@@ -393,11 +415,20 @@ describe('orchestrator', () => {
       ).toEqual([
         ['migration', '@nx/js:a'],
         ['migration', '@nx/js:b'],
+        ['final-validation', false],
       ]);
       // The generator flag is recorded from the plan: it decides how a step
-      // whose generator marker is absent may be retried.
-      expect(state.steps.map((s) => s.hasGenerator)).toEqual([true, false]);
-      expect(state.steps.map((s) => s.status)).toEqual(['pending', 'pending']);
+      // whose generator marker is absent may be retried. The pass has none.
+      expect(state.steps.map((s) => s.hasGenerator)).toEqual([
+        true,
+        false,
+        false,
+      ]);
+      expect(state.steps.map((s) => s.status)).toEqual([
+        'pending',
+        'pending',
+        'pending',
+      ]);
 
       expect(state.rounds[0].planSnapshot).toBe('plan-0.json');
       expect(state.rounds[0].planHash).toMatch(/^[0-9a-f]{64}$/);
@@ -438,6 +469,7 @@ describe('orchestrator', () => {
         skipInstall: false,
         installedNxVersion: '23.0.0',
         validate: undefined,
+        finalValidation: undefined,
       });
       const { runId } = findActiveRun(root).active;
       stdout = '';
@@ -469,6 +501,7 @@ describe('orchestrator', () => {
         skipInstall: true,
         installedNxVersion: '23.0.0',
         validate: undefined,
+        finalValidation: undefined,
       });
 
       expect(findActiveRun(root).active.state.skipInstall).toBe(true);
@@ -490,6 +523,7 @@ describe('orchestrator', () => {
         skipInstall: false,
         installedNxVersion: '23.0.0',
         validate: undefined,
+        finalValidation: undefined,
       });
 
       expect(mockCheckpoint).toHaveBeenCalledWith(
@@ -502,6 +536,36 @@ describe('orchestrator', () => {
         sha: 'face0006face0006face0006face0006face0006',
         stepIds: [],
       });
+      // The diff base is the checkpoint, not the HEAD the user's uncommitted
+      // changes sat on top of.
+      expect(state.gitRefAtInit).toBe(
+        'face0006face0006face0006face0006face0006'
+      );
+    });
+
+    it('records HEAD as the diff base when no checkpoint lands, and nothing when the probe fails', async () => {
+      const input = {
+        root,
+        migrationsJson: { migrations: [genMig('@nx/js', 'a')] },
+        createCommits: false,
+        commitPrefix: 'chore: [nx migration] ',
+        skipInstall: false,
+        installedNxVersion: '23.0.0',
+        validate: undefined,
+        finalValidation: undefined,
+      };
+      mockGetLatestCommitSha.mockReturnValue(
+        'dead0003dead0003dead0003dead0003dead0003'
+      );
+      await runOrchestratorInit(input);
+      expect(findActiveRun(root).active.state.gitRefAtInit).toBe(
+        'dead0003dead0003dead0003dead0003dead0003'
+      );
+      rmSync(migrateRunsDir(root), { recursive: true, force: true });
+
+      mockGetLatestCommitSha.mockReturnValue(null);
+      await runOrchestratorInit(input);
+      expect(findActiveRun(root).active.state.gitRefAtInit).toBeUndefined();
     });
 
     it('runs the checkpoint before the run directory exists so its git add -A cannot track run scratch', async () => {
@@ -526,6 +590,7 @@ describe('orchestrator', () => {
         skipInstall: false,
         installedNxVersion: '23.0.0',
         validate: undefined,
+        finalValidation: undefined,
       });
 
       expect(runDirsAtCheckpoint).toBe(0);
@@ -544,6 +609,7 @@ describe('orchestrator', () => {
         skipInstall: false,
         installedNxVersion: '23.0.0',
         validate: undefined,
+        finalValidation: undefined,
       });
 
       expect(mockCheckpoint).not.toHaveBeenCalled();
@@ -568,6 +634,7 @@ describe('orchestrator', () => {
         skipInstall: false,
         installedNxVersion: '23.0.0',
         validate: undefined,
+        finalValidation: undefined,
       });
 
       expect(mockCheckpoint).toHaveBeenCalledTimes(1);
@@ -591,6 +658,7 @@ describe('orchestrator', () => {
         skipInstall: false,
         installedNxVersion: '23.0.0',
         validate: undefined,
+        finalValidation: undefined,
       });
 
       const { state } = findActiveRun(root).active;
@@ -617,6 +685,7 @@ describe('orchestrator', () => {
         skipInstall: false,
         installedNxVersion: '23.0.0',
         validate: undefined,
+        finalValidation: undefined,
       });
 
       expect(readFileSync(join(root, '.gitignore'), 'utf-8')).toContain(
@@ -654,6 +723,7 @@ describe('orchestrator', () => {
         skipInstall: false,
         installedNxVersion: '23.0.0',
         validate: undefined,
+        finalValidation: undefined,
       });
 
       expect(activeRunDirNames()).toEqual(['competitor-run']);
@@ -680,6 +750,7 @@ describe('orchestrator', () => {
         skipInstall: false,
         installedNxVersion: '23.0.0',
         validate: undefined,
+        finalValidation: undefined,
       });
 
       expect(result).toMatchObject({
@@ -838,6 +909,7 @@ describe('orchestrator', () => {
         skipInstall: false,
         installedNxVersion: '23.0.0',
         validate: undefined,
+        finalValidation: undefined,
       });
       const { runId } = findActiveRun(root).active;
 
@@ -864,6 +936,7 @@ describe('orchestrator', () => {
           skipInstall: false,
           installedNxVersion: '23.0.0',
           validate: undefined,
+          finalValidation: undefined,
         })
       ).rejects.toThrow(
         `The migration id '@nx/js:evil'; rm -rf ~' contains characters that are not shell-safe`
@@ -887,6 +960,7 @@ describe('orchestrator', () => {
         skipInstall: false,
         installedNxVersion: '23.0.0',
         validate: undefined,
+        finalValidation: undefined,
       };
       await runOrchestratorInit(initInput);
       const { runId } = findActiveRun(root).active;
@@ -1025,6 +1099,7 @@ describe('orchestrator', () => {
         skipInstall: false,
         installedNxVersion: '23.0.0',
         validate: undefined,
+        finalValidation: undefined,
       });
 
       expect(logged.map((l) => l.title)).not.toContainEqual(
@@ -1053,6 +1128,7 @@ describe('orchestrator', () => {
           skipInstall: false,
           installedNxVersion: '23.0.0',
           validate: undefined,
+          finalValidation: undefined,
           onExistingRun: 'start-fresh',
         })
       ).rejects.toThrow(
@@ -1073,6 +1149,7 @@ describe('orchestrator', () => {
         skipInstall: false,
         installedNxVersion: '23.0.0',
         validate: undefined,
+        finalValidation: undefined,
       };
       await runOrchestratorInit(initInput);
       const { runId } = findActiveRun(root).active;
@@ -1096,6 +1173,7 @@ describe('orchestrator', () => {
         skipInstall: false,
         installedNxVersion: '23.0.0',
         validate: undefined,
+        finalValidation: undefined,
       };
       await runOrchestratorInit(initInput);
       const { runId } = findActiveRun(root).active;
@@ -1134,6 +1212,7 @@ describe('orchestrator', () => {
         skipInstall: false,
         installedNxVersion: '23.0.0',
         validate: undefined,
+        finalValidation: undefined,
       });
 
       expect(result).toMatchObject({ kind: 'existing-run', runId: 'run-1' });
@@ -1149,6 +1228,7 @@ describe('orchestrator', () => {
         skipInstall: false,
         installedNxVersion: '23.0.0',
         validate: undefined,
+        finalValidation: undefined,
       });
       const { runId } = findActiveRun(root).active;
       const before = readRunState(runDir(root, runId));
@@ -1163,6 +1243,7 @@ describe('orchestrator', () => {
         skipInstall: false,
         installedNxVersion: '23.0.0',
         validate: undefined,
+        finalValidation: undefined,
       });
 
       expect(result).toMatchObject({ kind: 'existing-run', runId });
@@ -1188,6 +1269,7 @@ describe('orchestrator', () => {
           skipInstall: false,
           installedNxVersion: '23.0.0',
           validate: undefined,
+          finalValidation: undefined,
         })
       ).rejects.toThrow(/could not be determined[\s\S]*corrupt/);
 
@@ -1212,6 +1294,7 @@ describe('orchestrator', () => {
           skipInstall: false,
           installedNxVersion: '23.0.0',
           validate: undefined,
+          finalValidation: undefined,
         })
       ).rejects.toThrow(/not a valid run id/);
 
@@ -1238,6 +1321,7 @@ describe('orchestrator', () => {
         skipInstall: false,
         installedNxVersion: '23.0.0',
         validate: undefined,
+        finalValidation: undefined,
       });
 
       expect(output.warn).toHaveBeenCalledWith(
@@ -1275,6 +1359,11 @@ describe('orchestrator', () => {
       const state = readRunState(dir);
       expect(state.checkpointFailed).toBe(false);
       expect(state.commits.some((c) => c.kind === 'checkpoint')).toBe(true);
+      // The late checkpoint captured what the init one missed, so the run's
+      // diffs are taken against it from here on.
+      expect(state.gitRefAtInit).toBe(
+        'face0006face0006face0006face0006face0006'
+      );
     });
 
     it('keeps the checkpointFailed flag on resume when the working-tree probe fails', async () => {
@@ -1297,6 +1386,67 @@ describe('orchestrator', () => {
         policy: { createCommits: true, skipInstall: false },
       });
 
+      const state = readRunState(dir);
+      expect(state.checkpointFailed).toBe(true);
+      expect(state.commits.some((c) => c.kind === 'checkpoint')).toBe(false);
+    });
+
+    it('retries the failed init checkpoint on resume when the run opted out of the final validation pass', async () => {
+      // The opted-out pass is planned as skipped at init, so it must not count
+      // as an advanced step that makes a late checkpoint unsafe.
+      const migrationsJson = { migrations: [genMig('@nx/js', 'a')] };
+      mockGetWorkingTreeStatus
+        .mockReturnValueOnce('dirty')
+        .mockReturnValue('clean');
+      mockGetLatestCommitSha
+        .mockReturnValueOnce('before-sha')
+        .mockReturnValue('face0007face0007face0007face0007face0007');
+      const dir = setupRun('run-1', {
+        steps: [
+          migStep('step-1', '@nx/js:a', 'pending'),
+          passStep('step-2', 'skipped', { dispenseCount: 0 }),
+        ],
+        createCommits: true,
+        checkpointFailed: true,
+        planHash: computePlanHash(migrationsJson),
+        plan: migrationsJson.migrations,
+      });
+
+      await runOrchestratorResume({
+        root,
+        runId: 'run-1',
+        policy: { createCommits: true, skipInstall: false },
+      });
+
+      expect(mockCheckpoint).toHaveBeenCalledTimes(1);
+      const state = readRunState(dir);
+      expect(state.checkpointFailed).toBe(false);
+      expect(state.commits.some((c) => c.kind === 'checkpoint')).toBe(true);
+      expect(state.gitRefAtInit).toBe(
+        'face0007face0007face0007face0007face0007'
+      );
+    });
+
+    it('does not retry the init checkpoint on resume once the final validation pass is parked', async () => {
+      // A plan with no migrations parks the pass on the first reconcile; a
+      // late checkpoint would absorb whatever the pass has edited since.
+      const migrationsJson = { migrations: [] };
+      mockGetWorkingTreeStatus.mockReturnValue('dirty');
+      const dir = setupRun('run-1', {
+        steps: [passStep('step-1', 'awaiting-prompt-outcome')],
+        createCommits: true,
+        checkpointFailed: true,
+        planHash: computePlanHash(migrationsJson),
+        plan: migrationsJson.migrations,
+      });
+
+      await runOrchestratorResume({
+        root,
+        runId: 'run-1',
+        policy: { createCommits: true, skipInstall: false },
+      });
+
+      expect(mockCheckpoint).not.toHaveBeenCalled();
       const state = readRunState(dir);
       expect(state.checkpointFailed).toBe(true);
       expect(state.commits.some((c) => c.kind === 'checkpoint')).toBe(false);
@@ -1354,6 +1504,7 @@ describe('orchestrator', () => {
       skipInstall: false,
       installedNxVersion: '23.0.0',
       validate: undefined as boolean | undefined,
+      finalValidation: undefined as boolean | undefined,
       ...extra,
     });
     const sha = (n: number) => n.toString(16).padStart(40, '0');
@@ -2092,6 +2243,7 @@ describe('orchestrator', () => {
       skipInstall: false,
       installedNxVersion: '23.0.0',
       validate: undefined as boolean | undefined,
+      finalValidation: undefined as boolean | undefined,
     });
 
     it('writes the runbook into the run directory and emits its bytes ahead of the initialized block', async () => {
@@ -2151,6 +2303,31 @@ describe('orchestrator', () => {
       expect(runbookPresentAtPublish).toBe(true);
     });
 
+    it('records the final-validation policy on the run, on unless the flag is false', async () => {
+      await runOrchestratorInit(
+        initInput({ migrations: [genMig('@nx/js', 'a')] })
+      );
+      expect(findActiveRun(root).active.state.finalValidation).toBe(true);
+      rmSync(migrateRunsDir(root), { recursive: true, force: true });
+
+      await runOrchestratorInit({
+        ...initInput({ migrations: [genMig('@nx/js', 'a')] }),
+        finalValidation: false,
+      });
+      const { state } = findActiveRun(root).active;
+      expect(state.finalValidation).toBe(false);
+      // Planned but skipped, so the completion report still accounts for it.
+      expect(state.steps.map((s) => [s.kind, s.status])).toEqual([
+        ['migration', 'pending'],
+        ['final-validation', 'skipped'],
+      ]);
+      const onDisk = readFileSync(
+        join(runDir(root, state.runId), 'RUNBOOK.md'),
+        'utf-8'
+      );
+      expect(onDisk).not.toContain('validation pass over the whole workspace');
+    });
+
     it('records --validate=false on the run and renders the runbook without the validation pass', async () => {
       await runOrchestratorInit({
         ...initInput({ migrations: [genMig('@nx/js', 'a')] }),
@@ -2163,7 +2340,7 @@ describe('orchestrator', () => {
         join(runDir(root, runId), 'RUNBOOK.md'),
         'utf-8'
       );
-      expect(onDisk).not.toContain('a validation pass');
+      expect(onDisk).not.toContain("validate the generator's changes");
     });
 
     it('re-emits the stored runbook bytes on resume, even from a different nx version', async () => {
@@ -2991,6 +3168,7 @@ describe('orchestrator', () => {
       skipInstall: false,
       installedNxVersion: '23.0.0',
       validate: undefined,
+      finalValidation: undefined,
     });
 
     it('refuses a fresh init when scratch files are tracked, before any git side effect', async () => {
@@ -3086,6 +3264,7 @@ describe('orchestrator', () => {
         skipInstall: false,
         installedNxVersion: '22.5.0',
         validate: undefined,
+        finalValidation: undefined,
       });
 
       expect(checkpointSawEntry).toBe(true);
@@ -7234,6 +7413,353 @@ describe('orchestrator', () => {
 
       expect(lastBlock().action).toBe('still-running');
       expect(readRunState(dir).noProgress.consecutiveCount).toBe(1);
+    });
+  });
+
+  describe('reconcile: final-validation', () => {
+    const BASE = 'beef0002beef0002beef0002beef0002beef0002';
+    const HEAD = 'face0042face0042face0042face0042face0042';
+    const passHandoffPath = (dir: string) => runStepHandoffPath(dir, 'step-2');
+    function writePassHandoff(
+      dir: string,
+      handoff: Record<string, unknown>
+    ): void {
+      mkdirSync(dirname(passHandoffPath(dir)), { recursive: true });
+      writeFileSync(passHandoffPath(dir), JSON.stringify(handoff));
+    }
+    function parsePromptBlocks(): { step: string; payload: any }[] {
+      const re =
+        /<nx_migrate_prompt step="([^"]*)">\n([\s\S]*?)\n<\/nx_migrate_prompt>/g;
+      const blocks: { step: string; payload: any }[] = [];
+      let m: RegExpExecArray | null;
+      while ((m = re.exec(stdout)) !== null) {
+        blocks.push({ step: m[1], payload: JSON.parse(m[2]) });
+      }
+      return blocks;
+    }
+    function afterMigrations(
+      opts: {
+        createCommits?: boolean;
+        gitRefAtInit?: string | false;
+        passStatus?: MigrateStepStatus;
+        issues?: MigrateRunIssue[];
+      } = {}
+    ): string {
+      return setupRun('run-1', {
+        steps: [
+          migStep('step-1', '@nx/js:gen', 'succeeded'),
+          passStep('step-2', opts.passStatus ?? 'pending'),
+        ],
+        createCommits: opts.createCommits ?? false,
+        plan: [genMig('@nx/js', 'gen')],
+        ...(opts.gitRefAtInit === false
+          ? {}
+          : { gitRefAtInit: opts.gitRefAtInit ?? BASE }),
+        ...(opts.issues ? { issues: opts.issues } : {}),
+      });
+    }
+
+    it('parks the pass once the migration steps are done, hands out its instructions file and records the dispense baselines', async () => {
+      mockGetLatestCommitSha.mockReturnValue(HEAD);
+      mockGetWorkingTreeStatus.mockReturnValue('clean');
+      const dir = afterMigrations();
+
+      await runOrchestratorReconcile({ root, runId: 'run-1' });
+
+      const step = readRunState(dir).steps[1];
+      expect(step).toMatchObject({
+        kind: 'final-validation',
+        status: 'awaiting-prompt-outcome',
+        awaitingKind: 'final-validation',
+        attempt: 1,
+        dispenseCount: 1,
+        gitRefBefore: HEAD,
+        treeCleanAtDispense: true,
+      });
+      expect(step.finishedAt).toEqual(expect.any(String));
+      // Counted after the migration step's own dispense.
+      expect(mockStepDispensed).toHaveBeenCalledWith({
+        attempt: 1,
+        ordinal: 2,
+      });
+      const block = lastBlock();
+      expect(block).toMatchObject({ step: 'step-2', action: 'await-prompt' });
+      expect(block.payload.next).toBe('npx nx migrate --run-id=run-1');
+      expect(block.payload.instructions).toContain(
+        'final validation pass over the workspace is awaiting your outcome'
+      );
+      expect(block.payload.instructions).toContain(
+        `Handoff file: ${passHandoffPath(dir)}`
+      );
+      const [prompt] = parsePromptBlocks();
+      expect(prompt.step).toBe('step-2');
+      expect(prompt.payload.kind).toBe('final-validation');
+      const instructionsPath = join(root, prompt.payload.instructions);
+      expect(prompt.payload.instructions).toBe(
+        `.nx/migrate-runs/run-1/prompts/step-2/instructions.md`
+      );
+      const instructions = readFileSync(instructionsPath, 'utf-8');
+      expect(instructions).toContain(`nx affected --base ${BASE} -t <targets>`);
+      expect(instructions).toContain(
+        `<handoff_path>\n${passHandoffPath(dir)}\n</handoff_path>`
+      );
+      expect(instructions).toContain('lint first, then build, then unit tests');
+    });
+
+    it('re-emits the pass on a later reconcile and rewrites a removed instructions file', async () => {
+      const dir = afterMigrations();
+      await runOrchestratorReconcile({ root, runId: 'run-1' });
+      const instructionsPath = join(
+        dir,
+        'prompts',
+        'step-2',
+        'instructions.md'
+      );
+      rmSync(instructionsPath);
+
+      await runOrchestratorReconcile({ root, runId: 'run-1' });
+
+      expect(readRunState(dir).steps[1]).toMatchObject({
+        status: 'awaiting-prompt-outcome',
+        dispenseCount: 1,
+      });
+      expect(lastBlock()).toMatchObject({
+        step: 'step-2',
+        action: 'await-prompt',
+      });
+      expect(parsePromptBlocks()).toHaveLength(2);
+      expect(existsSync(instructionsPath)).toBe(true);
+      expect(mockStepDispensed).toHaveBeenCalledTimes(1);
+    });
+
+    it('falls back to run-many when the run recorded no base ref', async () => {
+      const dir = afterMigrations({ gitRefAtInit: false });
+
+      await runOrchestratorReconcile({ root, runId: 'run-1' });
+
+      const instructions = readFileSync(
+        join(dir, 'prompts', 'step-2', 'instructions.md'),
+        'utf-8'
+      );
+      expect(instructions).toContain(
+        'could not record the commit it started from'
+      );
+      expect(instructions).toContain('nx run-many -t <targets>');
+      expect(instructions).not.toContain(`nx affected --base ${BASE}`);
+    });
+
+    it.each([true, false])(
+      'folds a completed pass, committing under a fixed name when commits are on (%s), and completes the run',
+      async (createCommits) => {
+        mockCommit.mockResolvedValue({ status: 'committed', sha: HEAD });
+        const dir = afterMigrations({
+          createCommits,
+          passStatus: 'awaiting-prompt-outcome',
+        });
+        writePassHandoff(dir, {
+          status: 'success',
+          summary: 'lint, build and test ran green',
+        });
+
+        await runOrchestratorReconcile({ root, runId: 'run-1' });
+
+        const state = readRunState(dir);
+        expect(state.steps[1]).toMatchObject({
+          status: 'succeeded',
+          promptOutcome: {
+            status: 'completed',
+            summary: 'lint, build and test ran green',
+          },
+        });
+        expect(state.status).toBe('completed');
+        expect(existsSync(passHandoffPath(dir))).toBe(false);
+        if (createCommits) {
+          expect(mockCommit).toHaveBeenCalledTimes(1);
+          expect(mockCommit.mock.calls[0][1]).toEqual({
+            name: 'final validation',
+          });
+          expect(state.commits).toEqual([
+            { kind: 'landed', sha: HEAD, stepIds: ['step-2'], ownerAttempt: 1 },
+          ]);
+        } else {
+          expect(mockCommit).not.toHaveBeenCalled();
+          expect(state.commits).toEqual([]);
+        }
+        const block = lastBlock();
+        expect(block.action).toBe('complete');
+        expect(block.payload.instructions).toContain('applied: 2');
+      }
+    );
+
+    it('offers the retry menu for a failed pass in its own words, and a retry parks it again', async () => {
+      mockGetLatestCommitSha.mockReturnValue(HEAD);
+      const dir = afterMigrations({ passStatus: 'awaiting-prompt-outcome' });
+      writePassHandoff(dir, { status: 'failed', summary: 'tests are red' });
+
+      await runOrchestratorReconcile({ root, runId: 'run-1' });
+
+      expect(readRunState(dir).steps[1].status).toBe('failed');
+      const menu = lastBlock();
+      expect(menu).toMatchObject({ step: 'step-2', action: 'retry-failed' });
+      expect(menu.payload.instructions).toContain(
+        'The final validation pass failed: tests are red.'
+      );
+      expect(menu.payload.instructions).toContain(
+        'Retries left for this validation pass: 2.'
+      );
+      expect(menu.payload.instructions).toContain(
+        'the validation pass was done by hand'
+      );
+      expect(menu.payload.instructions).toContain(
+        'give up on this validation pass'
+      );
+      expect(menu.payload.instructions).not.toContain('migration ');
+      // No generator half, so the plain retry is preselected.
+      expect(menu.payload.next).toContain('--step-action=retry');
+
+      await runOrchestratorReconcile({
+        root,
+        runId: 'run-1',
+        stepAction: 'retry',
+      });
+
+      expect(readRunState(dir).steps[1]).toMatchObject({
+        status: 'awaiting-prompt-outcome',
+        attempt: 2,
+        dispenseCount: 2,
+      });
+      expect(lastBlock()).toMatchObject({
+        step: 'step-2',
+        action: 'await-prompt',
+      });
+    });
+
+    it.each([
+      ['skip', 'skipped'],
+      ['unresolved', 'unresolved'],
+    ] as const)(
+      'lets --step-action=%s settle a failed pass and complete the run',
+      async (action, status) => {
+        const dir = afterMigrations({ passStatus: 'awaiting-prompt-outcome' });
+        writePassHandoff(dir, { status: 'failed', summary: 'tests are red' });
+        await runOrchestratorReconcile({ root, runId: 'run-1' });
+
+        await runOrchestratorReconcile({
+          root,
+          runId: 'run-1',
+          stepAction: action,
+        });
+
+        const state = readRunState(dir);
+        expect(state.steps[1].status).toBe(status);
+        expect(state.status).toBe('completed');
+        const block = lastBlock();
+        expect(block.action).toBe('complete');
+        if (status === 'unresolved') {
+          expect(state.issues).toEqual([
+            expect.objectContaining({
+              summary:
+                'The final validation pass was left unresolved after 1 attempt: tests are red',
+              disposition: 'deferred-final',
+            }),
+          ]);
+          expect(block.payload.instructions).toContain(
+            '- the final validation pass: tests are red'
+          );
+        } else {
+          expect(block.payload.instructions).toContain('skipped: 1');
+        }
+      }
+    );
+
+    it("lists the issues the run deferred as the pass's own, and folds their resolution into its commit", async () => {
+      mockCommit.mockResolvedValue({ status: 'committed', sha: HEAD });
+      const deferred: MigrateRunIssue = {
+        id: 'issue-1',
+        fingerprint: issueFingerprint('gen left a broken import'),
+        summary: 'gen left a broken import',
+        reportedByStepId: 'step-1',
+        applicableStepIds: ['step-1'],
+        disposition: 'deferred-final',
+      };
+      const dir = afterMigrations({ createCommits: true, issues: [deferred] });
+
+      await runOrchestratorReconcile({ root, runId: 'run-1' });
+
+      const dispense = lastBlock();
+      expect(dispense.action).toBe('await-prompt');
+      expect(dispense.payload.instructions).toContain(
+        'issue-1 (deferred to this step): gen left a broken import'
+      );
+      expect(dispense.payload.instructions).toContain('"issueUpdates"');
+      expect(dispense.payload.instructions).not.toContain(
+        'deferred past the migration steps'
+      );
+
+      writePassHandoff(dir, {
+        status: 'success',
+        summary: 'fixed the import',
+        issueUpdates: [{ id: 'issue-1', disposition: 'resolved' }],
+      });
+      await runOrchestratorReconcile({ root, runId: 'run-1' });
+
+      const state = readRunState(dir);
+      expect(state.issues).toEqual([
+        expect.objectContaining({
+          id: 'issue-1',
+          disposition: 'resolved',
+          resolvedByStepId: 'step-2',
+        }),
+      ]);
+      expect(state.commits).toEqual([
+        {
+          kind: 'landed',
+          sha: HEAD,
+          stepIds: ['step-2'],
+          issueIds: ['issue-1'],
+          ownerAttempt: 1,
+        },
+      ]);
+      expect(state.status).toBe('completed');
+      expect(lastBlock().payload.instructions).not.toContain('issue-1');
+    });
+
+    it('completes a run whose plan skipped the pass, reporting it skipped', async () => {
+      setupRun('run-1', {
+        steps: [
+          migStep('step-1', '@nx/js:gen', 'succeeded'),
+          passStep('step-2', 'skipped', { dispenseCount: 0 }),
+        ],
+        plan: [genMig('@nx/js', 'gen')],
+      });
+
+      await runOrchestratorReconcile({ root, runId: 'run-1' });
+
+      const state = readRunState(runDir(root, 'run-1'));
+      expect(state.status).toBe('completed');
+      expect(state.steps[1]).toMatchObject({
+        status: 'skipped',
+        dispenseCount: 0,
+      });
+      expect(mockStepDispensed).not.toHaveBeenCalled();
+      expect(parsePromptBlocks()).toHaveLength(0);
+      const block = lastBlock();
+      expect(block.action).toBe('complete');
+      expect(block.payload.instructions).toContain('applied: 1');
+      expect(block.payload.instructions).toContain('skipped: 1');
+    });
+
+    it('completes a run recorded before the pass existed as before', async () => {
+      setupRun('run-1', {
+        steps: [migStep('step-1', '@nx/js:gen', 'succeeded')],
+        plan: [genMig('@nx/js', 'gen')],
+      });
+
+      await runOrchestratorReconcile({ root, runId: 'run-1' });
+
+      expect(readRunState(runDir(root, 'run-1')).status).toBe('completed');
+      expect(lastBlock().action).toBe('complete');
+      expect(parsePromptBlocks()).toHaveLength(0);
     });
   });
 

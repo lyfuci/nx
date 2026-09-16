@@ -64,6 +64,7 @@ function input(): RunMasterSessionInput {
     skipInstall: false,
     installedNxVersion: '23.0.0',
     validate: undefined,
+    finalValidation: undefined,
     agent: {
       id: 'claude-code',
       displayName: 'Claude Code',
@@ -156,6 +157,7 @@ describe('runMasterSession', () => {
       skipInstall: false,
       installedNxVersion: '23.0.0',
       validate: undefined,
+      finalValidation: undefined,
       emitAgentInstructions: false,
       onExistingRun: 'report',
       confirmStart: confirmNewRun,
